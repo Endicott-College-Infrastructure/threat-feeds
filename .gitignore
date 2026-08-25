@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+*.key
+*.pem
+.DS_Store
+Thumbs.db
+*.sw[a-p]
+*~

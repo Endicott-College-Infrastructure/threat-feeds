@@ -1,0 +1,29 @@
+# EditorConfig — consistent formatting across editors and both seats.
+# https://editorconfig.org  (VS Code needs the EditorConfig extension to honor it)
+#
+# Copy to a repo root as `.editorconfig`.
+#
+# On line endings: we deliberately do NOT set a global end_of_line. The Windows
+# working tree is CRLF (core.autocrlf=true) and forcing LF everywhere would fight
+# it until the per-repo renormalization migration. Shell scripts are the one
+# exception — they must be LF or the shebang breaks on the Linux servers.
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.sh]
+end_of_line = lf
+
+[*.md]
+trim_trailing_whitespace = false   # two trailing spaces = a hard line break in Markdown
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab

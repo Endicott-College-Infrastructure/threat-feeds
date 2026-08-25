@@ -1,0 +1,345 @@
+---
+# =============================================================================
+# Syntax Lint on Pull Request
+#
+# Copy to: .github/workflows/lint.yml in your repo. No placeholders to fill in.
+#
+# WHY THIS EXISTS
+#
+# Local dev runs PHP 8.4; the production boxes run 7.3.31. That gap is silent and
+# one-directional: 8.x-only syntax -- match(), enums, readonly, nullsafe ?->,
+# named arguments, str_contains() -- passes `php -l` on a developer machine and
+# fatals on the server. Nothing else in this pipeline catches it, and a fatal in
+# a web root is a white page for a student.
+#
+# This lints against BOTH versions. The 7.3 leg is the one that matters; the 8.4
+# leg catches the reverse (code that only works on the old version) so the
+# eventual upgrade is not a surprise.
+#
+# WHY THE UPPER LEG IS 8.4 AND NOT 8.2
+#
+# It was 8.2, chosen when XAMPP on Windows was the dev environment and shipped
+# 8.2. That environment is retired: WSL Debian is primary and its `php` is
+# 8.4.24, with prod's 7.3.33 installed alongside as `php7.3`. An upper leg of
+# 8.2 was testing against a PHP nobody runs any more -- neither dev nor the
+# upgrade target, which STANDARDS.md puts at 8.3/8.4 because 8.2 is near the end
+# of its own support window. Changing it only affects repos that copy this
+# template from now on; repos already carrying lint.yml keep their own matrix
+# until someone updates it deliberately.
+#
+# WHY 7.3 AND NOT 7.4
+#
+# Because that is what `php -v` returns on both Heimdall and studentdhcp:
+# 7.3.31-1~deb10u{5,7}, Debian 10 buster stock. This leg was originally set to
+# 7.4 on the assumption that "prod is 7.x" meant the last 7.x. It does not, and
+# the difference is not academic -- 7.4 added arrow functions, typed properties,
+# `??=`, spread-in-array-literal, and numeric literal separators. All five parse
+# cleanly under a 7.4 lint and are hard parse errors on the actual servers.
+# Verified 2026-07-21 by linting each construct under php:7.3-cli (rc=255) and
+# php:7.4-cli (rc=0).
+#
+# A lint floor set too high is worse than no lint: it reports success while
+# passing exactly the code it exists to stop. If prod is upgraded, raise this
+# matrix in the same change -- do not let it drift the other way again.
+#
+# WHY CHANGED FILES ONLY
+#
+# Linting the whole repo against 7.3 would fail on day one for any repo with
+# pre-existing 8.x syntax. A required check that is red before you have written
+# anything gets switched off, and a check people have learned to ignore is worse
+# than no check -- the same reasoning as the gitleaks baseline in
+# secret-scan.yml. New and changed code must pass; existing debt is reported by
+# the informational full-repo pass below, which never fails the build.
+#
+# WHY DOCKER AND NOT A setup-php ACTION
+#
+# The official php:X-cli images are first-party and version-pinned by tag. Using
+# them keeps a third-party action out of a workflow that runs on every PR. It
+# also makes adding or retiring a version a one-line change to the matrix.
+#
+# WHAT THIS IS NOT
+#
+# `php -l` is a SYNTAX check, not a test suite and not a linter. It will not
+# catch an undefined function, a bad SQL query, or a logic error. There are no
+# tests in these repos yet; this is the cheapest useful floor, not the ceiling.
+# =============================================================================
+
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+# GitHub-HOSTED on purpose. This is PR-triggered, so it runs code from a branch
+# that has not been reviewed. The self-hosted runners live on production boxes;
+# putting a pull_request trigger on one is remote code execution on prod. Every
+# PR-triggered workflow in this org stays on ubuntu-latest.
+jobs:
+  php:
+    name: php -l (${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # report both versions, not just the first to break
+      matrix:
+        php: ['7.3', '8.4']     # 7.3 = production (both boxes), 8.4 = WSL dev + upgrade target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base branch present to diff against it. A shallow clone
+          # makes the diff below silently empty, which would report success
+          # while checking nothing.
+          fetch-depth: 0
+
+      - name: Collect changed PHP files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.php' > changed.txt || true
+          else
+            # workflow_dispatch: no PR context. Fall back to the last commit.
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.php' > changed.txt || true
+          fi
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed PHP files:"
+          cat changed.txt
+
+      - name: Lint changed files
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue     # skip files deleted later in the branch
+            if ! docker run --rm -v "$PWD":/app -w /app "php:${{ matrix.php }}-cli" \
+                   php -l "$f"; then
+              fail=1
+            fi
+          done < changed.txt
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::PHP ${{ matrix.php }} syntax errors above."
+            echo "If this passes on 8.4 but fails here, you have used syntax newer"
+            echo "than PHP ${{ matrix.php }}. Heimdall and studentdhcp both run"
+            echo "7.3.31 -- it would fatal there, as a white page."
+            exit 1
+          fi
+          echo "All changed PHP files parse under ${{ matrix.php }}."
+
+      - name: Full-repo lint (informational, never fails)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          echo "Pre-existing files that do not parse under PHP ${{ matrix.php }}:"
+          docker run --rm -v "$PWD":/app -w /app "php:${{ matrix.php }}-cli" \
+            sh -c 'find . -path ./.git -prune -o -name "*.php" -print0 \
+                   | xargs -0 -r -n1 php -l 2>&1 | grep -v "^No syntax errors" || true'
+
+  python:
+    name: python syntax + style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Collected once and reused by every step below, so the syntax gate and the
+      # style annotations always describe the same set of files.
+      - name: Collect changed Python files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' > changed.txt || true
+          else
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.py' > changed.txt || true
+          fi
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed Python files:"
+          cat changed.txt
+
+      # BLOCKING. py_compile is syntax only and needs nothing installed -- it is the
+      # floor, and it stays blocking because a file that does not parse cannot be
+      # reviewed. Style findings below are a different question and do not fail.
+      - name: Compile changed Python files
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            python3 -m py_compile "$f" || fail=1
+          done < changed.txt
+          [ "$fail" -eq 0 ] || { echo "::error::Python syntax errors above."; exit 1; }
+
+      # -----------------------------------------------------------------------
+      # ADVISORY from here down: annotates the PR, never fails the build.
+      #
+      # Same reasoning as the gitleaks baseline and the changed-files-only PHP
+      # leg -- a check that is red before you have written anything gets switched
+      # off, and a check people have learned to ignore is worse than no check.
+      #
+      # pip-installed at an EXACT pin rather than astral-sh/ruff-action, for the
+      # same reason the PHP legs use official first-party images: no third-party
+      # action in a workflow carrying a pull_request trigger. The pin also stops a
+      # ruff release from turning a PR red on code nobody touched. Bump it
+      # deliberately, in its own PR -- see STANDARDS.md > Code style.
+      # -----------------------------------------------------------------------
+      # Block scalar, not an inline string: `--only-binary=:all:` contains a
+      # colon-space sequence, which YAML reads as a nested mapping and rejects.
+      - name: Install ruff
+        if: steps.changed.outputs.count != '0'
+        run: |
+          pip install --disable-pip-version-check --only-binary=:all: --quiet ruff==0.16.2
+
+      # --output-format=github renders findings as inline PR annotations. Without
+      # it "advisory" means "buried in a log nobody opens."
+      # --force-exclude makes ruff honour its own exclude list even for paths named
+      # explicitly on the command line, which is exactly what this loop does.
+      - name: ruff check (advisory)
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        run: xargs -r -a changed.txt ruff check --force-exclude --output-format=github --
+
+      - name: ruff format --check (advisory)
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        run: xargs -r -a changed.txt ruff format --check --force-exclude --
+
+  # ---------------------------------------------------------------------------
+  # Shell is the highest-privilege code in this estate -- ops/deploy.sh and
+  # ops/install.sh run as root on production through a NOPASSWD sudoers grant.
+  # Nothing had ever read them. shellcheck is advisory here for the same reason
+  # ruff is, but `error`-level findings are expected to be fixed before merge;
+  # STANDARDS.md > Code style says so.
+  #
+  # shellcheck comes from the Ubuntu archive on the runner rather than a pinned
+  # download, because the runner image is itself a pinned, signed artifact and
+  # apt is the trusted path -- see STANDARDS.md > Installing the tools.
+  # ---------------------------------------------------------------------------
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect changed shell scripts
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.sh' > changed.txt || true
+          else
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.sh' > changed.txt || true
+          fi
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed shell scripts:"
+          cat changed.txt
+
+      - name: shellcheck (advisory)
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          xargs -r -a changed.txt shellcheck --format=gcc --
+
+  # ---------------------------------------------------------------------------
+  # Markdown and JSON. Markdown is advisory, for the same reason ruff and
+  # shellcheck are: a check that is red before you have written anything gets
+  # switched off.
+  #
+  # pymarkdownlnt, not the Ruby `markdownlint` in Debian -- that one pulls in a
+  # language runtime this estate does not otherwise have. pymarkdown implements
+  # the same MD001-MD048 rule numbering, in Python, which is already a
+  # dependency. Pinned for the same reason ruff is.
+  #
+  # Config is .pymarkdown.json at the repo root. Four rules are off on purpose
+  # (MD013/MD033/MD036/MD041) -- see STANDARDS.md > Code style > Markdown before
+  # re-enabling any of them. MD013 in particular was measured: 215 of its 238
+  # findings were table rows, which cannot wrap.
+  # ---------------------------------------------------------------------------
+  markdown:
+    name: markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect changed Markdown files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.md' > changed.txt || true
+          else
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.md' > changed.txt || true
+          fi
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed Markdown files:"
+          cat changed.txt
+
+      # Block scalar, not an inline string -- same trap as the ruff install
+      # above. `--only-binary=:all:` contains a colon-space sequence, which YAML
+      # reads as a nested mapping and rejects.
+      - name: Install pymarkdownlnt
+        if: steps.changed.outputs.count != '0'
+        run: |
+          pip install --disable-pip-version-check --only-binary=:all: --quiet pymarkdownlnt==0.9.39
+
+      - name: pymarkdown scan (advisory)
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        run: xargs -r -a changed.txt pymarkdown --config .pymarkdown.json scan --
+
+  json:
+    name: json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # BLOCKING, unlike the advisory checks above. A .json that does not parse
+      # is not a style opinion -- it is a file nothing can read, and it fails at
+      # runtime instead. Two exclusions: .vscode/*.json is JSONC, which
+      # legitimately carries // comments and is not valid JSON; and reference/
+      # holds vendor artifacts stored byte-for-byte.
+      - name: Validate changed JSON
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.json' > changed.txt || true
+          else
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.json' > changed.txt || true
+          fi
+          fail=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              .vscode/*|*/.vscode/*|*vscode-extensions.json|*vscode-settings.json)
+                echo "skip (JSONC, comments are legal): $f" ; continue ;;
+              reference/*)
+                echo "skip (vendor artifact, stored byte-for-byte): $f" ; continue ;;
+            esac
+            if python3 -m json.tool "$f" > /dev/null; then
+              echo "ok: $f"
+            else
+              echo "::error file=$f::not valid JSON"
+              fail=1
+            fi
+          done < changed.txt
+          [ "$fail" -eq 0 ] || exit 1

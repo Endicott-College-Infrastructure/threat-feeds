@@ -1,0 +1,41 @@
+# =============================================================================
+# threat-feeds-sync.timer
+#
+# Copy to: /etc/systemd/system/threat-feeds-sync.timer on the management host, and
+# keep the reviewed copy here at ops/systemd/ in the repo.
+#
+# Enable with:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now threat-feeds-sync.timer
+#
+# Check it is actually scheduled:
+#   systemctl list-timers threat-feeds-sync.timer
+#   journalctl -u threat-feeds-sync.service -n 50
+#
+# WHY A SYSTEMD TIMER AND NOT GITHUB ACTIONS CRON
+#
+# GitHub silently disables scheduled workflows in a repo that goes 60 days
+# without activity -- a safety net that switches itself off without telling
+# anyone is worse than no safety net. This repo can plausibly go quiet if feed
+# sources don't change for a while. Same reasoning as every other capture-style
+# job in this estate (see templates/systemd/capture-app.service).
+# =============================================================================
+
+[Unit]
+Description=Fetch and publish the aggregated threat-intel blocklist every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+# If the box was down when a run was due, run once on the next boot rather
+# than silently skipping until the next hourly mark.
+Persistent=true
+
+# Stagger against every other timer on the management host.
+RandomizedDelaySec=5min
+
+Unit=threat-feeds-sync.service
+
+[Install]
+WantedBy=timers.target

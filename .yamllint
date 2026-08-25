@@ -1,0 +1,35 @@
+---
+# yamllint configuration for Endicott infrastructure repos.
+# Canonical copy lives in .github/templates/; see STANDARDS.md > Code style > YAML.
+#
+# Copy to the repo root as `.yamllint` alongside `.editorconfig`.
+#
+# WHY NOT PLAIN DEFAULTS
+#
+# yamllint's default line-length is 80. Every workflow in this estate already
+# runs to 99-103 columns, because `run:` blocks embed shell one-liners --
+# `git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py'` does not
+# wrap without a continuation that costs more readability than the length does.
+# Adopting the default would land this check red on day one against files nobody
+# had touched, and a check that is red before you write anything gets switched
+# off. Same reasoning as the gitleaks baseline and the changed-files-only PHP
+# lint. 120 clears the existing files with headroom.
+
+extends: default
+
+rules:
+  line-length:
+    max: 120
+
+  # GitHub Actions spells its trigger block `on:`. YAML 1.1 treats a bare `on`
+  # as a boolean, so yamllint's truthy rule flags it as a key -- on every
+  # workflow file we will ever write. It is correct Actions syntax; the rule is
+  # wrong here, not the file.
+  truthy:
+    check-keys: false
+
+# This repo has no reference/ directory of vendor artifacts (see STANDARDS.md
+# for why that pattern exists elsewhere in this estate) -- nothing to exclude
+# here beyond the usual virtualenv path.
+ignore: |
+  .venv/

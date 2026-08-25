@@ -1,0 +1,51 @@
+# =============================================================================
+# threat-feeds-sync.service
+#
+# Copy to: /etc/systemd/system/threat-feeds-sync.service on the management host, and
+# keep the reviewed copy here at ops/systemd/ in the repo.
+#
+# Paired with threat-feeds-sync.timer, which actually schedules it.
+# =============================================================================
+
+[Unit]
+Description=Fetch threat-intel feeds and publish the aggregated blocklist
+Documentation=https://github.com/Endicott-College-Infrastructure/threat-feeds
+After=network-online.target
+Wants=network-online.target
+
+# A failed run is not automatically visible -- nobody watches journald by
+# default, and this feed going stale for days would be silent otherwise. Point
+# this at a real handler (email/Slack/an issue) before relying on this timer;
+# see AGENTS.md section 8 for the current status of that handler.
+#
+# THIS DIRECTIVE MUST STAY IN [Unit]. OnFailure is a Unit option; systemd
+# parses the file section by section and ignores it under [Service]. This
+# exact mistake happened on an earlier capture-style job in this estate --
+# accepted without complaint, logged nothing, and left the handler inert.
+OnFailure=threat-feeds-sync-failure@%n.service
+
+[Service]
+Type=oneshot
+
+# Runs as the same github-run service account used for other capture-style
+# jobs on this host, with push access granted specifically to this repo.
+User=github-run
+Group=github-run
+
+ExecStart=/opt/scripts/threat_feeds_sync.sh
+
+# Network I/O against five external hosts plus a gitleaks scan. If it wedges,
+# let it die rather than overlap with the next timer firing.
+TimeoutStartSec=10min
+
+# Light hardening. This unit runs unattended every hour, forever.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+// Recommended VS Code extensions for this stack. Copy to <repo>/.vscode/extensions.json.
+// VS Code prompts to install these when the repo is opened, so every seat converges
+// on the same tooling instead of it living as tribal knowledge in a README.
+// (.vscode/*.json is JSONC — comments are allowed.)
+//
+// PLATFORM-NEUTRAL ON PURPOSE. The Windows Remote-WSL extension is not listed here:
+// it has to be installed before you can open the folder in WSL at all, so by the time
+// this prompt fires you already have it, and it means nothing on macOS. It belongs in
+// SETUP-WINDOWS-WSL.md, which is where it is.
+//
+// Extensions install PER CONTEXT. In a WSL window they install into WSL, separately
+// from any Windows-side copy, and a Windows install does not carry over. Accept the
+// prompt again inside WSL.
+{
+  "recommendations": [
+    "anthropic.claude-code",                  // Claude Code in the editor
+    "zoocodeorganization.zoo-code",           // Zoo Code — the agentic harness for the Gemini key
+    "bmewburn.vscode-intelephense-client",    // PHP IntelliSense + lint (catches what `php -l` won't)
+    "ms-python.python",                       // Python (automation/scripting)
+    "ms-python.vscode-pylance",               // Python type checking
+    "charliermarsh.ruff",                     // the linter/formatter CI runs — same rules, in-editor
+    "timonwong.shellcheck",                   // shell lint; ops scripts run as root on production
+    "eamodio.gitlens",                        // git blame / history / "why is this here" archaeology
+    "redhat.vscode-yaml",                     // GitHub Actions workflow files
+    "editorconfig.editorconfig",              // honor the repo's .editorconfig — without it, that file does nothing
+    "github.vscode-pull-request-github",      // PRs from the editor
+    "hediet.vscode-drawio"                    // edit *.drawio.svg topology diagrams in-editor
+  ]
+}

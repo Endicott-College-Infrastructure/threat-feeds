@@ -1,0 +1,36 @@
+{
+  "_comment": "priority: lower is filled first when the merged list exceeds --max-entries. See AGENTS.md section 1 for why the order is feodotracker/blocklist-de-sip first (small, targeted, high-confidence) and voipbl last (largest by far, no visible confidence threshold).",
+  "feeds": [
+    {
+      "name": "feodotracker",
+      "url": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "name": "blocklist-de-sip",
+      "url": "https://lists.blocklist.de/lists/sip.txt",
+      "enabled": true,
+      "priority": 2
+    },
+    {
+      "name": "spamhaus-drop",
+      "url": "https://www.spamhaus.org/drop/drop.txt",
+      "enabled": true,
+      "priority": 3
+    },
+    {
+      "name": "ipsum-level5",
+      "url": "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/5.txt",
+      "enabled": true,
+      "priority": 4
+    },
+    {
+      "name": "voipbl",
+      "url": "http://www.voipbl.org/update/",
+      "enabled": true,
+      "priority": 5,
+      "note": "Plain HTTP -- no HTTPS source available as of 2026-08-25. See AGENTS.md section 1. Also by far the largest feed (~98k raw entries) -- it fills whatever budget the higher-priority feeds leave, per build.py's per-feed quota allocation."
+    }
+  ]
+}
