@@ -136,15 +136,19 @@ class GeoCache:
                 for ip in batch:
                     info = resolved.get(ip, LOOKUP_FAILED)
                     result[ip] = info
-                    # Cache the failure too, but with no resolved_at bump beyond
-                    # "now" -- it will simply be retried next run rather than
-                    # treated as a confirmed answer for a full week.
-                    self._data[ip] = {
-                        "asn": info.asn,
-                        "country": info.country,
-                        "as_name": info.as_name,
-                        "resolved_at": now,
-                    }
+                    # Do NOT cache a failure: this dict is exactly what gets
+                    # persisted below, and stamping it with resolved_at=now
+                    # would make a transient Cymru outage look as fresh as a
+                    # real answer -- stuck excluded for the full TTL instead
+                    # of retried on the very next run. Simply not writing an
+                    # entry means it stays in "stale_or_missing" next time.
+                    if info is not LOOKUP_FAILED:
+                        self._data[ip] = {
+                            "asn": info.asn,
+                            "country": info.country,
+                            "as_name": info.as_name,
+                            "resolved_at": now,
+                        }
             self._save()
 
         return result

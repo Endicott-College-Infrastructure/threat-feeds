@@ -99,7 +99,16 @@ def build(
     geo_cache = geo.GeoCache(GEO_CACHE_FILE)
 
     store = GhPagesStore(REPO_ROOT)
-    store.ensure_worktree()
+    if not dry_run or store.worktree_exists():
+        # A real run always needs the worktree. A dry run only opens it if
+        # it's already there (so the delta-gate preview is accurate against
+        # real prior state) -- it must never CREATE one, since that's real
+        # local git state (an orphan branch, a worktree checkout on disk)
+        # for a mode whose whole contract is "write and publish nothing."
+        # On a dry run against a fresh clone with no worktree yet,
+        # previous_line_count() below simply reports None (never published)
+        # rather than fabricate a worktree just to answer that question.
+        store.ensure_worktree()
 
     any_feed_fetched = False
     to_write: list[tuple[str, str]] = []

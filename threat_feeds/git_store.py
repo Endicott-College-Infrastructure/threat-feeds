@@ -128,6 +128,10 @@ class GhPagesStore:
     def worktree(self) -> Path:
         return self._worktree
 
+    def worktree_exists(self) -> bool:
+        """True if the worktree is already checked out -- never creates anything."""
+        return (self._worktree / ".git").exists()
+
     def ensure_worktree(self) -> Path:
         """Create the orphan branch and its worktree if they don't exist yet."""
         if not (self.repo / ".git").exists():
@@ -139,6 +143,16 @@ class GhPagesStore:
 
         if (self._worktree / ".git").exists():
             self._assert_worktree_sane()
+            # Reset to a clean HEAD before this run does anything. If a
+            # previous run crashed after writing some files but before (or
+            # during) commit_and_push -- a push failure, the timer's
+            # TimeoutStartSec killing the process -- stray uncommitted
+            # writes would otherwise sit in the worktree and get swept into
+            # THIS run's commit via `git add -A`, even for a profile this
+            # run never touched (its own gate refused, or its feeds failed
+            # to fetch). Discarding them here guarantees every commit
+            # reflects only what this run actually decided to publish.
+            self.discard_uncommitted()
             return self._worktree
 
         self._worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -227,17 +241,28 @@ class GhPagesStore:
             )
 
     def previous_line_count(self, relative_path: str) -> int | None:
-        """Entry count of the last published version of this file, or None if never published."""
-        path = self._worktree / relative_path
-        if not path.is_file():
+        """
+        Entry count of the last COMMITTED version of this file, or None if
+        never published (including: no worktree checked out yet at all, e.g.
+        a --dry-run on a fresh clone that intentionally skipped
+        ensure_worktree() rather than create real git state as a side
+        effect). Deliberately reads via `git show HEAD:...`, not the
+        working-tree file directly -- discard_uncommitted() now runs before
+        this in the normal flow, but reading from HEAD is the real guarantee:
+        the delta gate must compare against what was actually last
+        published, never against an uncommitted leftover on disk.
+        """
+        if not self.worktree_exists():
             return None
-        return len(
-            [
-                line
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+        proc = subprocess.run(
+            ["git", "-C", str(self._worktree), "show", f"HEAD:{relative_path}"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        if proc.returncode != 0:
+            return None
+        return len([line for line in proc.stdout.splitlines() if line.strip()])
 
     def write(self, relative_path: str, content: str) -> None:
         path = self._worktree / relative_path
@@ -246,9 +271,11 @@ class GhPagesStore:
 
     def discard_uncommitted(self) -> None:
         """
-        Reset the worktree to HEAD and remove untracked files. Used when a
-        later gate (gitleaks) fires after some files were already written --
-        leaves the worktree clean for the next run rather than half-written.
+        Reset the worktree to HEAD and remove untracked files. Called both
+        at the start of ensure_worktree() (clearing any stray leftovers from
+        a run that crashed mid-publish) and after a later gate (gitleaks)
+        fires post-write -- either way, leaves the worktree clean rather
+        than half-written.
         """
         self._git(["checkout", "--", "."], cwd=self._worktree)
         self._git(["clean", "-fd"], cwd=self._worktree)

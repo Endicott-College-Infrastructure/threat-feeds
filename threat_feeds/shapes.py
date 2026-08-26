@@ -30,17 +30,35 @@ IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 # of /24s), not an arbitrary round number.
 SIP_CANDIDATE_POOL = 5000
 
+# The sip shape's whole design assumes near-host-granularity entries --
+# measured 2026-08-25, blocklist-de-sip and voipbl are >99.9% /32s, with only
+# a handful of entries as wide as /24. A network wider than /24 here is a
+# data anomaly (or, since voipbl is fetched over plain HTTP -- see AGENTS.md
+# section 1 -- possibly a tampered one), not a legitimate single attacker.
+# Two independent reasons to reject it outright rather than just enumerate
+# it faster: enumerating a /8's ~16.7M addresses is a real CPU/memory
+# problem, and -- worse -- density-ranking by raw address count would let
+# one such entry fabricate thousands of maximum-density /24 buckets that
+# never actually appeared in any feed, potentially crowding out real
+# attacker-dense blocks in the published result.
+SIP_MAX_NETWORK_WIDTH = 24
+
 
 def _validated_networks(feed_results) -> list[IPNetwork]:
-    """Every v4 network from every successfully-fetched feed, bogon-filtered."""
+    """
+    Every v4 network from every successfully-fetched feed, bogon-filtered,
+    with rejections logged per feed so it's clear which source produced them.
+    """
     all_networks: list[IPNetwork] = []
     for r in feed_results:
-        if r.fetched:
-            all_networks.extend(n for n in r.networks if n.version == 4)
-    safe, rejected = validate.filter_safe(all_networks)
-    if rejected:
-        log.warning("rejected networks by reason: %s", dict(rejected))
-    return safe
+        if not r.fetched:
+            continue
+        v4 = [n for n in r.networks if n.version == 4]
+        safe, rejected = validate.filter_safe(v4)
+        if rejected:
+            log.warning("%s: rejected networks by reason: %s", r.name, dict(rejected))
+        all_networks.extend(safe)
+    return all_networks
 
 
 def select_none(feed_results) -> list[IPNetwork]:
@@ -82,19 +100,24 @@ def select_geo_density_ranked(feed_results, geo_cache: geo.GeoCache) -> list[IPN
     included deliberately (see geo.is_us_or_unannounced), on the reasoning
     that no legitimate SIP traffic originates from unrouted address space.
     """
+    validated = _validated_networks(feed_results)
+
+    wide = [n for n in validated if n.prefixlen < SIP_MAX_NETWORK_WIDTH]
+    if wide:
+        log.warning(
+            "sip: %d network(s) wider than /%d rejected outright (not enumerated) -- "
+            "this shape assumes near-host-granularity entries; anything this wide is "
+            "a data anomaly or a tampered feed, not a legitimate single attacker: %s",
+            len(wide),
+            SIP_MAX_NETWORK_WIDTH,
+            [str(n) for n in wide[:10]],
+        )
+    narrow_enough = [n for n in validated if n.prefixlen >= SIP_MAX_NETWORK_WIDTH]
+
     addrs: set[int] = set()
-    for r in feed_results:
-        if not r.fetched:
-            continue
-        v4 = [n for n in r.networks if n.version == 4]
-        safe, rejected = validate.filter_safe(v4)
-        if rejected:
-            log.warning(
-                "sip/%s: rejected networks by reason: %s", r.name, dict(rejected)
-            )
-        for n in safe:
-            for a in n:
-                addrs.add(int(a))
+    for n in narrow_enough:
+        for a in n:
+            addrs.add(int(a))
 
     buckets: Counter = Counter(a >> 8 for a in addrs)
     candidates = buckets.most_common(SIP_CANDIDATE_POOL)
