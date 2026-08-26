@@ -60,24 +60,27 @@ where before adding any of that detail here.
 ## 2. Load-bearing details that look incidental
 
 - **`feeds.json`'s `priority` field determines what survives truncation, not fetch order.**
-  Measured 2026-08-25: VoIPBL alone returns ~98k raw entries against a ~1,500-entry budget —
-  more than every other feed combined, by two orders of magnitude. `build.py` allocates budget
-  in priority order (lower number = filled first) specifically so one oversized feed can't
-  silently crowd out every other source the way a flat merge-then-truncate did in an earlier
-  version of this script. **Real-world consequence of the current priority order and
-  `MAX_ENTRIES=1500`**: feodotracker and blocklist-de-sip are included in full, spamhaus-drop is
-  usually truncated, and ipsum-level5 and voipbl are usually excluded entirely. If you want
-  ipsum included, raise `MAX_ENTRIES` (once the real device-side ceiling is confirmed — see
-  below) or reprioritize, but do it deliberately and re-run with `--dry-run` to see the new
-  allocation logged, not by guessing.
-- **`MAX_ENTRIES` in `threat_feeds/build.py` (currently 1,500) is NOT a verified hardware limit.**
-  It's carried over from an earlier draft, explained (not confirmed) by a secondhand claim that
-  some firewalls cap the number of objects created from an externally-fetched address list at a
-  fraction of the device's total object budget, and that this feed is meant to be shared across
-  multiple device tiers, so the binding constraint is whichever device has the least headroom.
-  Confirm the real number against your specific device's own support documentation before
-  treating 1,500 as anything but a starting point. (Which devices, and the exact numbers, are
-  tracked internally — see section 0.)
+  Measured 2026-08-25: VoIPBL alone returns ~98k raw entries against a 240-entry budget — more
+  than every other feed combined, by nearly three orders of magnitude. `build.py` allocates
+  budget in priority order (lower number = filled first) specifically so one oversized feed
+  can't silently crowd out every other source the way a flat merge-then-truncate did in an
+  earlier version of this script. **Real-world consequence of the current priority order and
+  `MAX_ENTRIES=240`**: feodotracker and blocklist-de-sip are included in full (~80 entries
+  combined), spamhaus-drop is truncated to whatever's left (~160 entries), and ipsum-level5 and
+  voipbl are excluded entirely. If you want broader inclusion, raise `MAX_ENTRIES` only after
+  re-verifying the device ceiling below, or reprioritize — but do it deliberately and re-run
+  with `--dry-run` to see the new allocation logged, not by guessing.
+- **`MAX_ENTRIES=240` in `threat_feeds/build.py` is a verified device ceiling, not a guess.**
+  Confirmed 2026-08-26 by reading each device's own runtime-reported object-count ceiling
+  directly off a vendor-generated diagnostic report — not a vendor doc estimate, the device's
+  own reported limit:
+  - larger tier: 1,030 max externally-fetched address objects
+  - smaller tier: 256 max externally-fetched address objects ← **this one binds**
+  240 leaves a small margin below the smaller tier's reported hard ceiling, since behavior at
+  exactly the reported max hasn't been verified live. **If this feed is ever shared with a
+  device tier smaller than the one measured here, re-verify against that device's own report
+  before assuming 240 still fits** — do not assume the pattern holds without checking. (Which
+  devices, and the exact model/tier names, are tracked internally — see section 0.)
 
 ## 3. Names that are frozen
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-26
+
+- **`MAX_ENTRIES` dropped from 1,500 to 240**, based on real vendor diagnostic reports pulled
+  from both device tiers this feed is shared across (larger tier: 1,030 max externally-fetched
+  address objects; smaller tier: 256, which binds). The prior 1,500 default would have badly
+  overflowed the smaller tier.
+- Added `ops/install.sh`: creates a local git identity on the clone and documents the correct
+  service-account creation command (`--home-dir` outside `/home`, required because
+  `ProtectHome` masks it). Corrected the deployment plan from the shared `github-run` account
+  (that's the Actions runner, a different job) to a dedicated `threat-feeds` account, matching
+  how other scheduled capture-style tools in this estate are actually deployed.
+
 ## 2026-08-25
 
 - Initial version. Ports and hardens a draft aggregation script (previously written to

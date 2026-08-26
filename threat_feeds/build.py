@@ -39,14 +39,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FEEDS_FILE = REPO_ROOT / "feeds.json"
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "blocklist.txt"
 
-# Whether this number is right is still open (see AGENTS.md section 2): some
-# firewalls reportedly cap the number of objects created from an externally
-# fetched address list at a fraction of the device's total object budget, and
-# this feed is meant to be shared across multiple device tiers, so the binding
-# constraint is whichever device has the least headroom. 1,500 is a starting
-# point, not a verified limit -- confirm against your specific device's own
-# documentation/support channel before relying on it.
-MAX_ENTRIES = 1500
+# Verified 2026-08-26 by reading each device's own runtime-reported ceiling
+# on externally-fetched address objects, off a vendor-generated diagnostic
+# report -- not a vendor doc guess. The smaller tier is the binding
+# constraint, by a wide margin:
+#   larger tier:  1,030 max externally-fetched address objects
+#   smaller tier:   256 max externally-fetched address objects   <- binds
+# 240 leaves headroom below the smaller tier's reported hard ceiling, since
+# device behavior at exactly the reported max hasn't been verified live. If
+# this feed is ever shared with a device tier smaller than the one measured
+# here, re-verify against ITS OWN report before assuming 240 still fits -- see
+# AGENTS.md section 2.
+MAX_ENTRIES = 240
 
 
 def build(

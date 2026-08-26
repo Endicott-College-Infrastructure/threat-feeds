@@ -18,9 +18,13 @@
 #   Edit REPO_DIR below if this repo is cloned somewhere other than /srv.
 #
 # PREREQUISITES:
-#   - REPO_DIR is a clone of this repo with a working push credential for the
-#     github-run account (see README.md -- this is a new grant, not automatic,
-#     since deploy keys/PATs in this estate are scoped per-repo).
+#   - Set up via ops/install.sh, not by hand -- it creates the dedicated
+#     threat-feeds service account (NOT github-run, which is the Actions
+#     runner) with its home directory outside /home, sets a local git
+#     identity on the clone, and installs the systemd units. See README.md.
+#   - REPO_DIR is a clone of this repo with a working push credential for
+#     the threat-feeds account -- a new grant, not automatic, since deploy
+#     keys/PATs in this estate are scoped per-repo.
 #   - gitleaks installed. build.py refuses to commit unscanned by default; see
 #     .github/workflows/secret-scan.yml for the pinned version to install.
 # =============================================================================

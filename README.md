@@ -60,16 +60,25 @@ This runs on a systemd timer on an internal management host — **not** GitHub A
 `ops/systemd/threat-feeds-sync.timer` for the full reasoning).
 
 ```bash
-sudo cp ops/threat_feeds_sync.sh /opt/scripts/threat_feeds_sync.sh
-sudo chmod 755 /opt/scripts/threat_feeds_sync.sh
-sudo cp ops/systemd/threat-feeds-sync.{timer,service} /etc/systemd/system/
-sudo systemctl daemon-reload
+# Once: create the dedicated service account. NOT github-run (that's the Actions
+# runner, a different job) -- --home-dir is required, not optional, see ops/install.sh.
+sudo useradd --system -M --home-dir /var/lib/threat-feeds --shell /usr/sbin/nologin threat-feeds
+
+sudo git clone https://github.com/Endicott-College-Infrastructure/threat-feeds /srv/threat-feeds
+cd /srv/threat-feeds
+sudo ./ops/install.sh              # dry run -- prints, changes nothing
+sudo ./ops/install.sh --commit      # sets git identity, installs the systemd units
+
+# Run once by hand and read the output before enabling the timer
+sudo systemctl start threat-feeds-sync.service
+journalctl -u threat-feeds-sync.service -n 80 --no-pager
+
 sudo systemctl enable --now threat-feeds-sync.timer
 ```
 
-Prerequisites on the host (see `ops/threat_feeds_sync.sh` header):
-- A clone of this repo with a working **push** credential for the service account that runs it
-  — a new grant, scoped to this repo only.
+Prerequisites on the host (see `ops/install.sh` and `ops/threat_feeds_sync.sh` headers):
+- A clone of this repo at `/srv/threat-feeds` with a working **push** credential for the
+  `threat-feeds` account — a new grant, scoped to this repo only.
 - `gitleaks` installed.
 - **Failure alerting is not wired up yet** — `OnFailure=` in the `.service` file points at a
   handler that doesn't exist yet as of this writing. See `AGENTS.md` section 8 before treating
@@ -96,9 +105,10 @@ documentation for the exact feature name and configuration steps. In general:
   time based on when the rule was configured.
 - **Confirm your device's own entry-count ceiling before relying on `MAX_ENTRIES` in
   `build.py`.** Many firewalls cap the number of objects they'll create from an externally
-  fetched list — check your vendor's documentation or support channel for the real number before
-  assuming the current default fits. See `AGENTS.md` section 2 for the reasoning behind the
-  current default and why it's a starting point, not a confirmed hardware spec.
+  fetched list — the current default was set from the devices' own reported runtime limits
+  (not a vendor doc guess), but if you add a device tier smaller than the ones already
+  measured, re-check its own ceiling before assuming the default still fits. See `AGENTS.md`
+  section 2 for the confirmed numbers and how they were obtained.
 - The specific device models and vendor-specific setup steps used at this organization are
   tracked internally, not in this public repo.
 
@@ -106,8 +116,9 @@ documentation for the exact feature name and configuration steps. In general:
 
 - VoIPBL's feed URL is plain HTTP — the only non-HTTPS source of the five. See `AGENTS.md`
   section 1.
-- At the current `MAX_ENTRIES=1500` and priority order, ipsum-level5 and voipbl are typically
-  excluded entirely from the committed file — every feed is fetched and validated, but the
-  budget runs out before their turn. Run `--dry-run` to see the actual allocation for any given
-  moment; raise `MAX_ENTRIES` (once your device's real entry-count ceiling is confirmed) or
+- At the current `MAX_ENTRIES=240` and priority order, spamhaus-drop is truncated and
+  ipsum-level5/voipbl are excluded entirely from the committed file — every feed is fetched and
+  validated, but the budget runs out before their turn. Run `--dry-run` to see the actual
+  allocation for any given moment; raise `MAX_ENTRIES` (only after re-verifying every device
+  tier's own ceiling still supports it) or
   reprioritize in `feeds.json` if broader inclusion is wanted.

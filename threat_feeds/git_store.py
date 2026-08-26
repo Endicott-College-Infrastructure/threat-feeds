@@ -1,8 +1,8 @@
 """
 Gate and commit the built blocklist to `main`, then push.
 
-Unlike XIQ-Cloud-Config-Capture's SnapshotStore (a parentless `snapshots` branch
-in its own worktree, keeping dissimilar config snapshots out of code history),
+Unlike a snapshot-style capture tool's own store (a parentless orphan branch in
+its own worktree, keeping dissimilar config snapshots out of code history),
 this repo's only content IS the blocklist -- there's no code history to keep
 separate from it. This commits directly to `main` in the working tree the caller
 already has checked out.
