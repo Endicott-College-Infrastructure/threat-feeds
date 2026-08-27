@@ -27,10 +27,19 @@ OnFailure=threat-feeds-sync-failure@%n.service
 [Service]
 Type=oneshot
 
-# Runs as the same github-run service account used for other capture-style
-# jobs on this host, with push access granted specifically to this repo.
-User=github-run
-Group=github-run
+# Own dedicated account, NOT github-run -- that account is the Actions
+# runner (deploy.yml dispatch), a different job from this one. Matches how
+# other scheduled capture-style tools in this estate are actually deployed:
+# each scheduled job gets its own unprivileged account, with push access
+# granted specifically to the one repo it needs. See ops/install.sh for
+# account creation.
+User=threat-feeds
+Group=threat-feeds
+
+# Gives the account a real, owned home directory outside /home -- see
+# ProtectHome= below for why that matters. Also sets $STATE_DIRECTORY,
+# unused directly by this tool but harmless.
+StateDirectory=threat-feeds
 
 ExecStart=/opt/scripts/threat_feeds_sync.sh
 
@@ -42,6 +51,17 @@ TimeoutStartSec=10min
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
+
+# NOT `true`: other scheduled capture-style tools in this estate hit this
+# live -- useradd's default home for a service account is still
+# /home/$USER even with --no-create-home, and
+# ProtectHome=true masks all of /home with EACCES, breaking anything that
+# resolves $HOME (git's global config lookup, gitleaks) rather than merely
+# making it read-only. The real fix applied here is at the ACCOUNT level
+# (ops/install.sh requires --home-dir /var/lib/threat-feeds, outside the
+# masked paths) -- `read-only` is kept as defense in depth, not a substitute
+# for that fix, since it's untested whether read-only alone would have been
+# enough on its own.
 ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectControlGroups=true
