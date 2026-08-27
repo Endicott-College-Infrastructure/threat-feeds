@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Fetch every enabled feed in feeds.json, validate and cap the merged result, and
-commit it to docs/blocklist.txt on `main`.
+Fetch every enabled feed in feeds.json, run each shape's per-profile
+selection logic, and publish one file per shape x profile to the gh-pages
+branch.
 
 Required env vars: none -- all sources are public and unauthenticated.
 Example usage:
     python3 -m threat_feeds.build --dry-run
-    python3 -m threat_feeds.build --max-delta-pct 40
+    python3 -m threat_feeds.build
 
-Exit codes: 0 = committed or no change, 1 = a safety gate refused, 2 = every
-feed failed to fetch.
+Exit codes: 0 = published (or no change), 1 = a safety gate refused for
+every profile (nothing to publish), 2 = every feed failed to fetch.
 """
 
 from __future__ import annotations
@@ -19,17 +20,15 @@ import ipaddress
 import json
 import logging
 import sys
-from collections import Counter
 from pathlib import Path
 
-from . import fetch, validate
+from . import fetch, geo, shapes
 from .git_store import (
     DEFAULT_MAX_DELTA_PCT,
     GateRefusalError,
+    GhPagesStore,
     check_delta,
     check_nonempty,
-    commit_and_push,
-    previous_entry_count,
     scan_gitleaks,
 )
 
@@ -37,149 +36,169 @@ log = logging.getLogger("threat_feeds")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FEEDS_FILE = REPO_ROOT / "feeds.json"
-DEFAULT_OUTPUT = REPO_ROOT / "docs" / "blocklist.txt"
+GEO_CACHE_FILE = REPO_ROOT / ".geo_cache.json"
 
-# Whether this number is right is still open (see AGENTS.md section 2): some
-# firewalls reportedly cap the number of objects created from an externally
-# fetched address list at a fraction of the device's total object budget, and
-# this feed is meant to be shared across multiple device tiers, so the binding
-# constraint is whichever device has the least headroom. 1,500 is a starting
-# point, not a verified limit -- confirm against your specific device's own
-# documentation/support channel before relying on it.
-MAX_ENTRIES = 1500
+
+def _build_profile(
+    shape_name: str,
+    profile_name: str,
+    profile_config: dict,
+    feed_results: list,
+    geo_cache: geo.GeoCache,
+    store: GhPagesStore,
+    *,
+    max_delta_pct: int,
+) -> tuple[str, str] | None:
+    """
+    Run one profile's selection, gate it against the currently-published
+    version of its own file, and return (relative_path, content) if it
+    should be written -- or None if a gate refused it. A refusal here only
+    skips THIS profile; it never affects any other shape or profile.
+    """
+    selection = profile_config["selection"]
+    selector = shapes.SELECTORS[selection]
+    if selection == "geo-density-ranked":
+        ranked = selector(feed_results, geo_cache)
+    else:
+        ranked = selector(feed_results)
+
+    budget = profile_config["budget"]
+    subset = ranked if budget is None else ranked[:budget]
+    collapsed = list(ipaddress.collapse_addresses(subset))
+    new_count = len(collapsed)
+    relative_path = f"{shape_name}-{profile_name}.txt"
+
+    try:
+        check_nonempty(new_count)
+        previous_count = store.previous_line_count(relative_path)
+        check_delta(previous_count, new_count, max_delta_pct)
+    except GateRefusalError as e:
+        log.error("%s: gate refused: %s", relative_path, e)
+        return None
+
+    log.info(
+        "%s: %d entries (budget %s)",
+        relative_path,
+        new_count,
+        budget if budget is not None else "none",
+    )
+    content = "".join(f"{n}\n" for n in collapsed)
+    return relative_path, content
 
 
 def build(
     feeds_file: Path,
-    output_path: Path,
     *,
-    max_entries: int = MAX_ENTRIES,
     max_delta_pct: int = DEFAULT_MAX_DELTA_PCT,
     dry_run: bool = False,
     allow_missing_gitleaks: bool = False,
 ) -> int:
     feeds_config = json.loads(feeds_file.read_text(encoding="utf-8"))
-    feeds_list = feeds_config["feeds"]
-    results = fetch.fetch_all(feeds_list)
-    priority_by_name = {f["name"]: f.get("priority", 100) for f in feeds_list}
+    feeds_by_name = {f["name"]: f for f in feeds_config["feeds"]}
+    shapes_config = feeds_config["shapes"]
+    geo_cache = geo.GeoCache(GEO_CACHE_FILE)
 
-    for r in results:
-        if r.fetched:
-            log.info(
-                "%s: %d networks (%d unparsed lines skipped)",
-                r.name,
-                len(r.networks),
-                r.skipped_lines,
+    store = GhPagesStore(REPO_ROOT)
+    if not dry_run or store.worktree_exists():
+        # A real run always needs the worktree. A dry run only opens it if
+        # it's already there (so the delta-gate preview is accurate against
+        # real prior state) -- it must never CREATE one, since that's real
+        # local git state (an orphan branch, a worktree checkout on disk)
+        # for a mode whose whole contract is "write and publish nothing."
+        # On a dry run against a fresh clone with no worktree yet,
+        # previous_line_count() below simply reports None (never published)
+        # rather than fabricate a worktree just to answer that question.
+        store.ensure_worktree()
+
+    any_feed_fetched = False
+    to_write: list[tuple[str, str]] = []
+
+    for shape_name, shape_config in shapes_config.items():
+        shape_feeds = [
+            feeds_by_name[name]
+            for name in shape_config["feeds"]
+            if feeds_by_name[name].get("enabled", True)
+        ]
+        results = fetch.fetch_all(shape_feeds)
+        for r in results:
+            if r.fetched:
+                any_feed_fetched = True
+                log.info(
+                    "%s/%s: %d networks (%d unparsed lines skipped)",
+                    shape_name,
+                    r.name,
+                    len(r.networks),
+                    r.skipped_lines,
+                )
+            else:
+                log.error("%s/%s: FAILED -- %s", shape_name, r.name, r.error)
+
+        if not any(r.fetched for r in results):
+            log.error(
+                "%s: every feed failed to fetch -- skipping this shape entirely",
+                shape_name,
             )
-        else:
-            log.error("%s: FAILED -- %s", r.name, r.error)
+            continue
 
-    if not any(r.fetched for r in results):
-        log.error("every feed failed to fetch -- nothing to build")
+        for profile_name, profile_config in shape_config["profiles"].items():
+            written = _build_profile(
+                shape_name,
+                profile_name,
+                profile_config,
+                results,
+                geo_cache,
+                store,
+                max_delta_pct=max_delta_pct,
+            )
+            if written is not None:
+                to_write.append(written)
+
+    if not any_feed_fetched:
+        log.error("every feed in every shape failed to fetch -- nothing to publish")
         return 2
 
-    # Validate and collapse EACH feed independently, before any cross-feed
-    # merging. A single flat merge-then-truncate (the draft's approach) lets
-    # whichever feed's addresses happen to sort lowest crowd out every other
-    # feed entirely -- measured 2026-08-25: VoIPBL's ~98k raw host entries
-    # swamped a 1,500 cap so completely that the committed file was ENTIRELY
-    # VoIPBL addresses in a narrow range, with spamhaus/feodotracker/ipsum/
-    # blocklist.de silently absent despite the run reporting success.
-    per_feed: dict[str, list] = {}
-    all_rejections: Counter = Counter()
-    for r in results:
-        if not r.fetched:
-            continue
-        v4 = [n for n in r.networks if n.version == 4]
-        safe, rejected = validate.filter_safe(v4)
-        all_rejections.update(rejected)
-        per_feed[r.name] = list(ipaddress.collapse_addresses(safe))
-
-    if all_rejections:
-        log.warning("rejected networks by reason: %s", dict(all_rejections))
-
-    # Fill the budget in priority order (feeds.json's "priority", lower first),
-    # not address order. Every enabled feed gets a chance at the budget before
-    # any single feed can exhaust it; if total demand still exceeds max_entries,
-    # the LOWEST-priority feeds are the ones truncated or excluded, and that
-    # tradeoff is logged per feed rather than happening invisibly.
-    ordered_names = sorted(per_feed, key=lambda name: priority_by_name.get(name, 100))
-    allocated: list = []
-    remaining = max_entries
-    for name in ordered_names:
-        feed_nets = per_feed[name]
-        if remaining <= 0:
-            log.warning(
-                "%s: excluded entirely -- no budget remaining (%d entries dropped)",
-                name,
-                len(feed_nets),
-            )
-            continue
-        if len(feed_nets) <= remaining:
-            allocated.extend(feed_nets)
-            log.info("%s: %d entries included in full", name, len(feed_nets))
-            remaining -= len(feed_nets)
-        else:
-            allocated.extend(feed_nets[:remaining])
-            log.warning(
-                "%s: truncated to %d of %d entries -- out of budget",
-                name,
-                remaining,
-                len(feed_nets),
-            )
-            remaining = 0
-
-    # Cross-feed collapse can only reduce the count further (two feeds flagging
-    # adjacent netblocks merge into one entry) -- never increases it, so this is
-    # free headroom, not a risk to the budget just enforced above.
-    collapsed = list(ipaddress.collapse_addresses(allocated))
-    new_count = len(collapsed)
-    log.info("final list: %d entries (budget %d)", new_count, max_entries)
-
-    try:
-        check_nonempty(new_count)
-        previous_count = previous_entry_count(REPO_ROOT, output_path)
-        check_delta(previous_count, new_count, max_delta_pct)
-    except GateRefusalError as e:
-        log.error("gate refused: %s", e)
+    if not to_write:
+        log.error(
+            "every profile was gate-refused or produced nothing -- nothing to publish"
+        )
         return 1
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("".join(f"{net}\n" for net in collapsed), encoding="utf-8")
 
     if dry_run:
         log.info(
-            "dry run: wrote %s locally, skipping gitleaks scan / commit / push",
-            output_path,
+            "dry run: %d profile(s) would be published: %s",
+            len(to_write),
+            ", ".join(p for p, _ in to_write),
         )
         return 0
 
+    for relative_path, content in to_write:
+        store.write(relative_path, content)
+
     try:
-        scan_gitleaks(REPO_ROOT, require=not allow_missing_gitleaks)
+        scan_gitleaks(store.worktree, require=not allow_missing_gitleaks)
     except GateRefusalError as e:
-        log.error("gate refused: %s", e)
+        log.error("gate refused: %s -- discarding this run's changes", e)
+        store.discard_uncommitted()
         return 1
 
-    message = f"[Agent] threat-feeds sync -- {new_count} entries"
-    commit_and_push(REPO_ROOT, output_path, message, dry_run=dry_run)
+    message = f"[Agent] threat-feeds sync -- {len(to_write)} profile(s) updated"
+    store.commit_and_push(message)
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--feeds-file", type=Path, default=DEFAULT_FEEDS_FILE)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--max-entries", type=int, default=MAX_ENTRIES)
     parser.add_argument("--max-delta-pct", type=int, default=DEFAULT_MAX_DELTA_PCT)
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="fetch, validate, and run gates, but write nothing to git",
+        help="fetch, select, and run gates, but write and publish nothing",
     )
     parser.add_argument(
         "--allow-missing-gitleaks",
         action="store_true",
-        help="commit even if gitleaks is not installed (not the default for a reason)",
+        help="publish even if gitleaks is not installed (not the default for a reason)",
     )
     args = parser.parse_args(argv)
 
@@ -189,8 +208,6 @@ def main(argv: list[str] | None = None) -> int:
 
     return build(
         args.feeds_file,
-        args.output,
-        max_entries=args.max_entries,
         max_delta_pct=args.max_delta_pct,
         dry_run=args.dry_run,
         allow_missing_gitleaks=args.allow_missing_gitleaks,

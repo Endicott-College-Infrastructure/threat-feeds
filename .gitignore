@@ -8,3 +8,7 @@ __pycache__/
 Thumbs.db
 *.sw[a-p]
 *~
+
+# Local performance cache (IP -> ASN/country), not committed anywhere --
+# see threat_feeds/geo.py for why it exists.
+.geo_cache.json

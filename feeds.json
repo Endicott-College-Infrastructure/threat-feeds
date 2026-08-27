@@ -1,36 +1,54 @@
 {
-  "_comment": "priority: lower is filled first when the merged list exceeds --max-entries. See AGENTS.md section 1 for why the order is feodotracker/blocklist-de-sip first (small, targeted, high-confidence) and voipbl last (largest by far, no visible confidence threshold).",
+  "_comment": "Each shape draws from its own feeds. Selection is per-PROFILE, not per-shape: a capped profile (budget != null) needs a ranking/filter method suited to a slot-limited consumer, while the full/uncapped profile for the same shape should generally use 'none' (raw validated addresses, no aggregation or geographic filtering) since those constraints exist because of the slot budget, not the shape itself. See AGENTS.md section 2 for the measurements behind each choice.",
   "feeds": [
     {
       "name": "feodotracker",
       "url": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+      "enabled": true
+    },
+    {
+      "name": "ipsum-level6",
+      "url": "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/6.txt",
       "enabled": true,
-      "priority": 1
+      "note": "Level 6 = flagged by >=6 independent blocklists. Matches what's live in production today; do not lower without re-reading AGENTS.md section 2's reasoning for why the botnet shape needs the highest confidence tier, not the broadest one."
     },
     {
       "name": "blocklist-de-sip",
       "url": "https://lists.blocklist.de/lists/sip.txt",
-      "enabled": true,
-      "priority": 2
-    },
-    {
-      "name": "spamhaus-drop",
-      "url": "https://www.spamhaus.org/drop/drop.txt",
-      "enabled": true,
-      "priority": 3
-    },
-    {
-      "name": "ipsum-level5",
-      "url": "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/5.txt",
-      "enabled": true,
-      "priority": 4
+      "enabled": true
     },
     {
       "name": "voipbl",
       "url": "http://www.voipbl.org/update/",
       "enabled": true,
-      "priority": 5,
-      "note": "Plain HTTP -- no HTTPS source available as of 2026-08-25. See AGENTS.md section 1. Also by far the largest feed (~98k raw entries) -- it fills whatever budget the higher-priority feeds leave, per build.py's per-feed quota allocation."
+      "note": "Plain HTTP -- no HTTPS source available as of 2026-08-25. See AGENTS.md section 1."
+    },
+    {
+      "name": "spamhaus-drop",
+      "url": "https://www.spamhaus.org/drop/drop.txt",
+      "enabled": true
     }
-  ]
+  ],
+  "shapes": {
+    "botnet": {
+      "feeds": ["feodotracker", "ipsum-level6"],
+      "profiles": {
+        "full": { "budget": null, "selection": "none" }
+      }
+    },
+    "sip": {
+      "feeds": ["blocklist-de-sip", "voipbl"],
+      "profiles": {
+        "400": { "budget": 400, "selection": "geo-density-ranked" },
+        "full": { "budget": null, "selection": "none" }
+      }
+    },
+    "general": {
+      "feeds": ["spamhaus-drop"],
+      "profiles": {
+        "200": { "budget": 200, "selection": "size-ranked" },
+        "full": { "budget": null, "selection": "none" }
+      }
+    }
+  }
 }
