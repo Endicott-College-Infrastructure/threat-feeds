@@ -105,9 +105,9 @@ Prerequisites on the host (see `ops/install.sh` and `ops/threat_feeds_sync.sh` h
   `threat-feeds` account — a new grant, scoped to this repo only. It needs push access to `main`
   (this script keeps that branch current) and `gh-pages` (where `build.py` publishes).
 - `gitleaks` installed.
-- **Failure alerting is not wired up yet** — `OnFailure=` in the `.service` file points at a
-  handler that doesn't exist yet as of this writing. See `AGENTS.md` section 8 before treating
-  the timer alone as sufficient monitoring.
+- **Failure alerting**: `ops/install.sh` also installs `threat-feeds-sync-failure@.service`,
+  the `OnFailure=` handler — alert-only (a journal line), not mail/paging. See `AGENTS.md`
+  section 8 before treating the timer alone as sufficient monitoring.
 - The geo/ASN lookup the `sip` shape uses caches its answers in `.geo_cache.json` at the repo
   root (gitignored, never committed) — outbound TCP to `whois.cymru.com:43` needs to be
   reachable from this host.
