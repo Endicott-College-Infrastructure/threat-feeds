@@ -99,6 +99,12 @@ echo "--- systemd units ---"
 say "install ops/systemd/threat-feeds-sync.{service,timer} to /etc/systemd/system/"
 run install -m 0644 "$HERE/ops/systemd/threat-feeds-sync.service" /etc/systemd/system/
 run install -m 0644 "$HERE/ops/systemd/threat-feeds-sync.timer" /etc/systemd/system/
+say "install ops/systemd/threat-feeds-sync-failure@.service to /etc/systemd/system/"
+# Without this, threat-feeds-sync.service's OnFailure= points at a unit that
+# doesn't exist -- systemd accepts that silently, so a failed sync is
+# invisible rather than refused. See that file's own header for why this is
+# alert-only (a journal line), not mail/paging.
+run install -m 0644 "$HERE/ops/systemd/threat-feeds-sync-failure@.service" /etc/systemd/system/
 say "systemctl daemon-reload"
 run systemctl daemon-reload
 

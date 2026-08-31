@@ -202,12 +202,14 @@ independence.
 
 ## 8. Conventions specific to this repo
 
-- **Failure alerting is not wired up yet.** `ops/systemd/threat-feeds-sync.service`'s
-  `OnFailure=` points at `threat-feeds-sync-failure@%n.service`, which does not exist yet on
-  the management host as of this writing. A silently-stale blocklist is a worse failure mode than
-  most capture-job failures, since the feed becomes a firewall rule other systems trust to be
-  current. Wire up a real handler (email/Slack/an issue) or an `activexperts-monitoring` check
-  on a published file's last-commit age before treating this timer as sufficient on its own.
+- **Failure alerting**: `ops/systemd/threat-feeds-sync.service`'s `OnFailure=` points at
+  `threat-feeds-sync-failure@%n.service` (also in `ops/systemd/`, installed by `ops/install.sh`).
+  That unit is alert-only — a single `user.crit`-priority journal line, no mail or paging (see
+  its own header for why). A silently-stale blocklist is a worse failure mode than most
+  capture-job failures, since the feed becomes a firewall rule other systems trust to be current,
+  so a real notification path (an `activexperts-monitoring` check on a published file's
+  last-commit age, or `systemctl is-failed threat-feeds-sync`) is still the thing that actually
+  pages a person — the journal line is the hook that check reads, not the alert itself.
 - `feeds.json` is the only config file; there is no `/etc/threat-feeds/` config and no env vars
   are read, since every source (feeds and the geo/ASN lookup) is public and unauthenticated.
 - `.geo_cache.json` at the repo root is a local performance cache, gitignored, never committed —

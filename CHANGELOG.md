@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-31
+
+**Wired up the `OnFailure=` handler that was flagged as missing at deployment.**
+`ops/systemd/threat-feeds-sync-failure@.service` — modelled directly on
+`XIQ-Cloud-Config-Capture`'s equivalent unit — logs a single `user.crit` journal line naming the
+failed unit; it does not send mail or a page (no MTA/webhook confirmed on this host yet). Real
+notification is still an `activexperts-monitoring` check reading that line or the gh-pages
+commit age, not this unit by itself. `ops/install.sh` now installs it alongside the existing
+`.timer`/`.service` pair.
+
 ## 2026-08-26 (2)
 
 **Replaced the single blended blocklist with three shapes, each published at its own tiers.**
