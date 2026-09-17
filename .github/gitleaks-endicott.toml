@@ -1,0 +1,105 @@
+# =============================================================================
+# Supplementary gitleaks rules — Endicott College Infrastructure
+#
+# WHY THIS EXISTS
+#
+# gitleaks' default ruleset targets provider tokens with distinctive shapes:
+# ghp_, AKIA, Stripe keys. It deliberately does NOT flag `$password = "..."`,
+# because in a modern codebase that is overwhelmingly false positives — test
+# fixtures, example configs, variable names.
+#
+# Our legacy PHP is the opposite case: credentials are bare string literals.
+# The tooling is not broken; we are the outlier.
+#
+# MEASURED on the real /var/www/devicemanager tree, 2026-07-29, against ground
+# truth from credential-rotation-list.md:
+#
+#   gitleaks defaults .................... 14 real credentials found
+#   defaults + this file ................. 24 real credentials found
+#   naive keyword grep ................... 19 (and a DIFFERENT 19 — see below)
+#
+# False-positive floor with this file, on trees we know are clean:
+#   holidaygames 0 · wifiadmin 0 · serverlogs 1
+#
+# THIS IS NOT A CERTIFICATE OF CLEANLINESS. On the same tree, this ruleset and
+# a naive grep each found ~19-24 lines but agreed on only 12 — each catching
+# things the other missed. Use this to INVENTORY what needs rotating, never to
+# conclude a tree is clean. See the `scanners-disagree-use-both` principle.
+#
+# USAGE
+#   gitleaks dir <path> --config <this file> ...
+#
+# THIS FILE IS THE CANONICAL COPY. Every gate loads it:
+#
+#   githooks/pre-commit.py              auto-discovers it beside core.hooksPath
+#   plugins/.../hooks/pre-pr-gate.py    same resolver, duplicated
+#   plugins/.../skills/secret-scan      derives the path from core.hooksPath
+#   templates/capture-app.sh            GITLEAKS_CONFIG, default /opt/scripts/
+#   <repo>/.github/gitleaks-endicott.toml   VENDORED, byte-identical copies
+#
+# The vendored copies exist because CI checks out one repo and cannot read a
+# private sibling: GITHUB_TOKEN is repo-scoped, and GitHub Free does not expose
+# org-level variables to private repos. Copies are the lesser evil against a PAT.
+# EDIT HERE, THEN RE-SYNC. /endicott:endicott-doctor compares the hashes and
+# reports any copy that has drifted.
+# =============================================================================
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# The main rule. Note the identifier prefix is OPTIONAL ([A-Za-z0-9_]*, not
+# [A-Za-z_][A-Za-z0-9_]*). An earlier draft required at least one character
+# before the keyword, which matched `$snmp_auth` but could never match a bare
+# `'password' => '...'` — and five of DeviceManager's real credentials are
+# exactly that shape. Do not "tidy" that back to a mandatory prefix.
+# -----------------------------------------------------------------------------
+[[rules]]
+id = "endicott-inline-credential"
+description = "Credential assigned as a string literal (legacy PHP/Perl/shell)"
+regex = '''(?i)[$'"]?[A-Za-z0-9_]*(passwd|password|pass|pwd|secret|token|apikey|api_key|client_secret|auth|priv|credential|bindpw)[A-Za-z0-9_]*['"]?\s*(=>|[:=])\s*["'][^"'\s]{6,120}["']'''
+keywords = ["pass","pwd","secret","token","key","auth","priv","credential","bindpw"]
+
+[[rules]]
+id = "endicott-mysql-inline-password"
+description = "MySQL password on a command line (-pSECRET)"
+regex = '''mysql(dump|admin)?\s+[^\n|;]*-p['"]?[A-Za-z0-9!@#$%^&*_.-]{5,40}'''
+keywords = ["mysql"]
+
+[[rules]]
+id = "endicott-ldap-bind-password"
+description = "LDAP bind password (Apache directive or PHP)"
+regex = '''(?i)(AuthLDAPBindPassword|ldap_?bind_?pw|bind_?password)\s*[:=]?\s*["']?[^\s"']{5,80}'''
+keywords = ["authldapbindpassword","bindpw","bind_password","ldap_bind"]
+
+# -----------------------------------------------------------------------------
+# Allowlist. The path exclusions are load-bearing, not cosmetic: without the
+# third-party asset excludes, serverlogs reported 32 findings — 31 of them in
+# bundled TinyMCE JavaScript (editor_plugin_src.js and its locale files) and
+# none in application code. With them: 1.
+# -----------------------------------------------------------------------------
+[allowlist]
+description = "Third-party assets, placeholders, and correct env-var usage"
+paths = [
+  '''\.(js|css|map|min\.[a-z]+)$''',
+  '''(^|/)(vendor|node_modules|dist|assets|tinymce|jquery|bootstrap)/''',
+  '''\.example\.[a-z]+$''',
+  '''\.sample$''',
+  '''(^|/)(examples?|samples?|templates?|docs?)/''',
+  '''\.(md|markdown|txt)$''',
+]
+regexTarget = "line"
+regexes = [
+  # Placeholders — e.g. DeviceManager/api_dhcp_search_remote.php's
+  # `$api_key = 'your...'`, a known false positive on the rotation list.
+  '''(?i)(your[-_ ]?|my[-_ ]?|change[-_ ]?me|replace[-_ ]?|insert[-_ ]?|placeholder|example|dummy|xxxx+|<[A-Za-z_ ]+>)''',
+  # Correct practice — reading from the environment rather than hardcoding.
+  '''getenv\s*\(''',
+  '''\$_ENV\[''',
+  '''\$_SERVER\[''',
+  # Empty assignments.
+  '''(=>|[:=])\s*["']{2}''',
+  # Keys that are not credentials despite containing a trigger word.
+  # This is what stopped `$..._url = "https://..."` firing in wifiadmin.
+  '''(?i)[a-z0-9_]*(url|uri|file|path|name|host|dir|type|field|label|prefix)\s*(=>|[:=])''',
+]
