@@ -343,3 +343,142 @@ jobs:
             fi
           done < changed.txt
           [ "$fail" -eq 0 ] || exit 1
+
+  # ---------------------------------------------------------------------------
+  # YAML. Errors BLOCK, warnings annotate -- and yamllint draws that line
+  # itself: it exits 1 on an error (a duplicate key, broken indentation, a line
+  # past .yamllint's 120 columns) and 0 on warnings alone. So no
+  # continue-on-error here, unlike ruff and shellcheck.
+  #
+  # Changed files only, so a repo's existing warnings never turn a PR red. The
+  # exception is a change to .yamllint itself, which can change the verdict on
+  # files nobody touched, so it re-checks every YAML file in the repo.
+  #
+  # This checks YAML. Whether a workflow will actually RUN is the actionlint job
+  # below -- yamllint passes a workflow Actions silently ignores.
+  #
+  # yamllint reads .yamllint from the repo root; copy it from the templates
+  # alongside this file. Without it the defaults apply, and they fail every
+  # workflow here (80 columns, and `on:` read as a boolean).
+  #
+  # From the Ubuntu archive, like shellcheck -- see STANDARDS.md > Installing
+  # the tools.
+  # ---------------------------------------------------------------------------
+  yaml:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # No `|| true` on the git diff: a diff that fails would otherwise leave
+      # an empty list and a green check that inspected nothing.
+      #
+      # reference/ and .venv/ are filtered here as well as in .yamllint's
+      # `ignore:`, so the exclusion does not depend on the installed yamllint
+      # honouring `ignore:` for files named on the command line.
+      - name: Collect changed YAML files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            RANGE="${BASE_SHA}...HEAD"
+          else
+            RANGE="HEAD~1...HEAD"
+          fi
+          git diff --name-only --diff-filter=ACMR "$RANGE" -- '*.yml' '*.yaml' .yamllint > diff.txt
+          if grep -qx '.yamllint' diff.txt; then
+            echo ".yamllint changed -- checking every YAML file."
+            git ls-files -- '*.yml' '*.yaml' .yamllint > diff.txt
+          fi
+          # grep -v exits 1 when it filters everything out; that is not an error.
+          grep -vE '^(reference|\.venv)/' diff.txt > changed.txt || true
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "YAML files to check:"
+          cat changed.txt
+
+      - name: Require yamllint
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          if ! command -v yamllint > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq yamllint
+          fi
+          yamllint --version
+
+      - name: yamllint
+        if: steps.changed.outputs.count != '0'
+        run: xargs -r -a changed.txt yamllint --format github --
+
+  # ---------------------------------------------------------------------------
+  # Workflow files. BLOCKING, like json: a finding here is a workflow that will
+  # not run as written, or one that hands a PR author a shell -- not a style
+  # opinion. What it catches that nothing else here does:
+  #
+  #  - A workflow Actions silently ignores. Actions reads only the FIRST YAML
+  #    document in a file, and yamllint accepts several, so a stray `---` after
+  #    a header comment leaves a file that lints clean and never runs. This
+  #    estate has shipped one. actionlint reads the file the way Actions does
+  #    and fails it.
+  #  - Script injection. `${{ github.event.pull_request.title }}` inside a
+  #    `run:` is attacker-controlled shell in a PR-triggered job.
+  #  - shellcheck over every `run:` block. The shell job above sees only *.sh
+  #    files; the deploy steps that run as root live inline in workflows.
+  #  - Unknown `runs-on` labels, so a typo in a self-hosted label fails here
+  #    instead of queueing forever. Self-hosted labels are declared in
+  #    .github/actionlint.yaml -- add yours there when you fill in SERVERNAME.
+  #
+  # Every workflow file, not just changed ones: there are only a few, and a
+  # change to .github/actionlint.yaml has to re-check all of them.
+  #
+  # Pinned and checksum-verified, the same shape as gitleaks in
+  # secret-scan.yml. The pin also stops a new actionlint rule from turning a PR
+  # red on a workflow nobody touched. Bump it deliberately, in its own PR.
+  # ---------------------------------------------------------------------------
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          TARBALL="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+
+          curl -sSL --fail -o "/tmp/${TARBALL}" "${BASE}/${TARBALL}"
+          curl -sSL --fail -o /tmp/actionlint_checksums.txt \
+            "${BASE}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+
+          cd /tmp
+          grep " ${TARBALL}\$" actionlint_checksums.txt > /tmp/expected.sha256
+          if [ ! -s /tmp/expected.sha256 ]; then
+            echo "::error::No checksum published for ${TARBALL}. Refusing to install."
+            exit 1
+          fi
+          sha256sum -c /tmp/expected.sha256
+
+          tar -xzf "/tmp/${TARBALL}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      # Load-bearing. With no shellcheck on PATH, actionlint skips every `run:`
+      # block and exits 0 without a word -- measured against a block carrying
+      # two known findings. The runner image ships shellcheck today; this step
+      # makes that a checked fact instead of an assumption.
+      - name: Require shellcheck
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck --version
+
+      - name: actionlint
+        run: actionlint
