@@ -2,8 +2,7 @@
 
 ## Claude Code
 
-Skills available here: `pre-pr`, `secret-scan`, `style`, `diagramming`,
-`activexperts-monitoring`, `endicott-doctor`. Run `/endicott:pre-pr` and
+The estate plugin's skills are available here. Run `/endicott:pre-pr` and
 `/endicott:secret-scan` before opening a PR — nothing gates a merge on this plan, so your
 review is the only one this change gets.
 

@@ -8,23 +8,22 @@
 # in its [Unit] section. Until this file existed, that reference pointed at
 # nothing shipped, which meant a failed sync (a gate refusal, every feed
 # failing to fetch, a push rejection) was invisible -- this runs hourly with
-# nobody watching, and other systems (the SonicWalls' DEAGs) trust the
-# published files to be current. Modelled directly on xiq_capture's own
-# xiq_capture_failure@.service -- same gap, same fix, ported rather than
+# nobody watching, and the firewalls that consume these feeds trust the
+# published files to be current. Modelled on the failure unit of another
+# capture job in this estate -- same gap, same fix, ported rather than
 # re-invented.
 #
 # WHAT THIS DOES NOT DO
 #
-# It does not send mail or a page. This is the same host xiq_capture and
-# efa_auditor already run on, still with no MTA or webhook target confirmed
-# working -- writing one in here would be guessing at infrastructure that may
-# not exist. What it DOES do is make the failure locally unmistakable: a
+# It does not send mail or a page. This host has no MTA or webhook target
+# confirmed working -- writing one in here would be guessing at
+# infrastructure that may not exist. What it DOES do is make the failure locally unmistakable: a
 # single high-priority, greppable journal line naming the unit and its
 # result, distinct from the normal INFO-level sync log.
 #
-# That line is the hook. The actual notification path is an
-# activexperts-monitoring check (job-freshness on gh-pages' last commit age,
-# or unit-health via `systemctl is-failed threat-feeds-sync`) -- see
+# That line is the hook. The actual notification path is an external
+# monitoring check (job-freshness on gh-pages' last commit age, or
+# unit-health via `systemctl is-failed threat-feeds-sync`) -- see
 # AGENTS.md section 8. If a real mail/page transport is added to this box
 # later, extend the ExecStart below rather than duplicating the logic
 # elsewhere.

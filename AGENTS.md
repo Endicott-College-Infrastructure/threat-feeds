@@ -131,14 +131,10 @@ would be needless load on it for data that essentially never changes between run
 address, not 168 times. Never committed (gitignored) — it's a performance cache, not data.
 
 **Every capped tier's budget is a verified device ceiling, not a guess** — read directly off
-real devices' own reported runtime object-count limits, not vendor documentation:
-- larger device tier: 1,030 max externally-fetched address objects
-- smaller device tier: 256 max externally-fetched address objects ← binds `sip-400`'s design
-`general-200` and `sip-400` were both chosen with margin below the smaller tier's reported
-ceiling (240 was the prior single-list default; splitting into shapes freed room to size `sip`
-at 400 given the smaller tier's actual 256 limit is shared across both shapes on that device —
-the current 200+400=600 allocation leaves headroom, not a hard boundary at exactly 256+ceiling
-math). **If this feed is ever shared with a device tier smaller than the one measured here,
+real devices' own reported runtime object-count limits, not vendor documentation. Two device
+tiers consume these feeds, and the smaller one's limit binds both capped budgets: `general-200`
+and `sip-400` were chosen with margin below it. The figures themselves are tracked internally
+(section 0), so check there before changing a budget. **If this feed is ever shared with a device tier smaller than the one measured here,
 re-verify against that device's own report before assuming either budget still fits** — do not
 assume the pattern holds without checking. (Which devices, and the exact model/tier names, are
 tracked internally — see section 0.)
@@ -207,7 +203,7 @@ independence.
   That unit is alert-only — a single `user.crit`-priority journal line, no mail or paging (see
   its own header for why). A silently-stale blocklist is a worse failure mode than most
   capture-job failures, since the feed becomes a firewall rule other systems trust to be current,
-  so a real notification path (an `activexperts-monitoring` check on a published file's
+  so a real notification path (an external monitoring check on a published file's
   last-commit age, or `systemctl is-failed threat-feeds-sync`) is still the thing that actually
   pages a person — the journal line is the hook that check reads, not the alert itself.
 - `feeds.json` is the only config file; there is no `/etc/threat-feeds/` config and no env vars
