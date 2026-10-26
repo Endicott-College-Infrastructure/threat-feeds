@@ -3,10 +3,10 @@
 ## 2026-08-31
 
 **Wired up the `OnFailure=` handler that was flagged as missing at deployment.**
-`ops/systemd/threat-feeds-sync-failure@.service` — modelled directly on
-`XIQ-Cloud-Config-Capture`'s equivalent unit — logs a single `user.crit` journal line naming the
+`ops/systemd/threat-feeds-sync-failure@.service` — modelled on another capture job's
+equivalent unit — logs a single `user.crit` journal line naming the
 failed unit; it does not send mail or a page (no MTA/webhook confirmed on this host yet). Real
-notification is still an `activexperts-monitoring` check reading that line or the gh-pages
+notification is still an external monitoring check reading that line or the gh-pages
 commit age, not this unit by itself. `ops/install.sh` now installs it alongside the existing
 `.timer`/`.service` pair.
 
@@ -37,8 +37,8 @@ reasoning. Highlights:
   shape's feeds being briefly unreachable, no longer stops any other profile from publishing.
 - `MAX_ENTRIES` (a single global cap) is gone, replaced by a per-profile `budget` in
   `feeds.json`. The two capped tiers (`general-200`, `sip-400`) are both sized from real
-  devices' own reported object-count ceilings (1,030 / 256, the smaller binding) rather than a
-  vendor-doc guess — see `AGENTS.md` section 2.
+  devices' own reported object-count ceilings rather than a vendor-doc guess — see `AGENTS.md`
+  section 2.
 - Added `ops/install.sh`: creates a local git identity on the clone and documents the correct
   service-account creation command (`--home-dir` outside `/home`, required because
   `ProtectHome` masks it). Corrected the deployment plan from the shared `github-run` account
