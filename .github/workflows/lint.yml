@@ -1,67 +1,19 @@
 ---
 # =============================================================================
-# Syntax Lint on Pull Request
+# Lint on pull request
 #
-# Copy to: .github/workflows/lint.yml in your repo. No placeholders to fill in.
+# Python syntax (blocking) and style (advisory), shellcheck, Markdown, JSON,
+# YAML, and the workflow files themselves. Changed files only, except
+# actionlint, which reads every workflow.
 #
-# WHY THIS EXISTS
-#
-# Local dev runs PHP 8.4; the production boxes run 7.3.31. That gap is silent and
-# one-directional: 8.x-only syntax -- match(), enums, readonly, nullsafe ?->,
-# named arguments, str_contains() -- passes `php -l` on a developer machine and
-# fatals on the server. Nothing else in this pipeline catches it, and a fatal in
-# a web root is a white page for a student.
-#
-# This lints against BOTH versions. The 7.3 leg is the one that matters; the 8.4
-# leg catches the reverse (code that only works on the old version) so the
-# eventual upgrade is not a surprise.
-#
-# WHY THE UPPER LEG IS 8.4 AND NOT 8.2
-#
-# It was 8.2, chosen when XAMPP on Windows was the dev environment and shipped
-# 8.2. That environment is retired: WSL Debian is primary and its `php` is
-# 8.4.24, with prod's 7.3.33 installed alongside as `php7.3`. An upper leg of
-# 8.2 was testing against a PHP nobody runs any more -- neither dev nor the
-# upgrade target, which STANDARDS.md puts at 8.3/8.4 because 8.2 is near the end
-# of its own support window. Changing it only affects repos that copy this
-# template from now on; repos already carrying lint.yml keep their own matrix
-# until someone updates it deliberately.
-#
-# WHY 7.3 AND NOT 7.4
-#
-# Because that is what `php -v` returns on both Heimdall and studentdhcp:
-# 7.3.31-1~deb10u{5,7}, Debian 10 buster stock. This leg was originally set to
-# 7.4 on the assumption that "prod is 7.x" meant the last 7.x. It does not, and
-# the difference is not academic -- 7.4 added arrow functions, typed properties,
-# `??=`, spread-in-array-literal, and numeric literal separators. All five parse
-# cleanly under a 7.4 lint and are hard parse errors on the actual servers.
-# Verified 2026-07-21 by linting each construct under php:7.3-cli (rc=255) and
-# php:7.4-cli (rc=0).
-#
-# A lint floor set too high is worse than no lint: it reports success while
-# passing exactly the code it exists to stop. If prod is upgraded, raise this
-# matrix in the same change -- do not let it drift the other way again.
+# This repo has no PHP, so it carries no PHP job: a job that inspects nothing is
+# permanently green and reads as coverage.
 #
 # WHY CHANGED FILES ONLY
 #
-# Linting the whole repo against 7.3 would fail on day one for any repo with
-# pre-existing 8.x syntax. A required check that is red before you have written
-# anything gets switched off, and a check people have learned to ignore is worse
-# than no check -- the same reasoning as the gitleaks baseline in
-# secret-scan.yml. New and changed code must pass; existing debt is reported by
-# the informational full-repo pass below, which never fails the build.
-#
-# WHY DOCKER AND NOT A setup-php ACTION
-#
-# The official php:X-cli images are first-party and version-pinned by tag. Using
-# them keeps a third-party action out of a workflow that runs on every PR. It
-# also makes adding or retiring a version a one-line change to the matrix.
-#
-# WHAT THIS IS NOT
-#
-# `php -l` is a SYNTAX check, not a test suite and not a linter. It will not
-# catch an undefined function, a bad SQL query, or a logic error. There are no
-# tests in these repos yet; this is the cheapest useful floor, not the ceiling.
+# A check that is red before you have written anything gets switched off, and a
+# check people have learned to ignore is worse than no check. New and changed
+# code must pass; existing debt does not block.
 # =============================================================================
 
 name: Lint
@@ -72,71 +24,8 @@ on:
   workflow_dispatch:
 
 # GitHub-HOSTED on purpose. This is PR-triggered, so it runs code from a branch
-# that has not been reviewed. The self-hosted runners live on production boxes;
-# putting a pull_request trigger on one is remote code execution on prod. Every
-# PR-triggered workflow in this org stays on ubuntu-latest.
+# that has not been reviewed, and must never run on a machine we operate.
 jobs:
-  php:
-    name: php -l (${{ matrix.php }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false          # report both versions, not just the first to break
-      matrix:
-        php: ['7.3', '8.4']     # 7.3 = production (both boxes), 8.4 = WSL dev + upgrade target
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Need the base branch present to diff against it. A shallow clone
-          # makes the diff below silently empty, which would report success
-          # while checking nothing.
-          fetch-depth: 0
-
-      - name: Collect changed PHP files
-        id: changed
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ -n "${BASE_SHA:-}" ]; then
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.php' > changed.txt || true
-          else
-            # workflow_dispatch: no PR context. Fall back to the last commit.
-            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.php' > changed.txt || true
-          fi
-          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
-          echo "Changed PHP files:"
-          cat changed.txt
-
-      - name: Lint changed files
-        if: steps.changed.outputs.count != '0'
-        run: |
-          set -euo pipefail
-          fail=0
-          while IFS= read -r f; do
-            [ -f "$f" ] || continue     # skip files deleted later in the branch
-            if ! docker run --rm -v "$PWD":/app -w /app "php:${{ matrix.php }}-cli" \
-                   php -l "$f"; then
-              fail=1
-            fi
-          done < changed.txt
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::PHP ${{ matrix.php }} syntax errors above."
-            echo "If this passes on 8.4 but fails here, you have used syntax newer"
-            echo "than PHP ${{ matrix.php }}. Heimdall and studentdhcp both run"
-            echo "7.3.31 -- it would fatal there, as a white page."
-            exit 1
-          fi
-          echo "All changed PHP files parse under ${{ matrix.php }}."
-
-      - name: Full-repo lint (informational, never fails)
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          echo "Pre-existing files that do not parse under PHP ${{ matrix.php }}:"
-          docker run --rm -v "$PWD":/app -w /app "php:${{ matrix.php }}-cli" \
-            sh -c 'find . -path ./.git -prune -o -name "*.php" -print0 \
-                   | xargs -0 -r -n1 php -l 2>&1 | grep -v "^No syntax errors" || true'
-
   python:
     name: python syntax + style
     runs-on: ubuntu-latest
@@ -154,9 +43,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${BASE_SHA:-}" ]; then
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' > changed.txt
           else
-            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.py' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.py' > changed.txt
           fi
           echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
           echo "Changed Python files:"
@@ -179,13 +68,11 @@ jobs:
       # -----------------------------------------------------------------------
       # ADVISORY from here down: annotates the PR, never fails the build.
       #
-      # Same reasoning as the gitleaks baseline and the changed-files-only PHP
-      # leg -- a check that is red before you have written anything gets switched
-      # off, and a check people have learned to ignore is worse than no check.
+      # A check that is red before you have written anything gets switched off,
+      # and a check people have learned to ignore is worse than no check.
       #
-      # pip-installed at an EXACT pin rather than astral-sh/ruff-action, for the
-      # same reason the PHP legs use official first-party images: no third-party
-      # action in a workflow carrying a pull_request trigger. The pin also stops a
+      # pip-installed at an EXACT pin rather than astral-sh/ruff-action: no
+      # third-party action in a workflow carrying a pull_request trigger. The pin also stops a
       # ruff release from turning a PR red on code nobody touched. Bump it
       # deliberately, in its own PR -- see STANDARDS.md > Code style.
       # -----------------------------------------------------------------------
@@ -211,9 +98,8 @@ jobs:
         run: xargs -r -a changed.txt ruff format --check --force-exclude --
 
   # ---------------------------------------------------------------------------
-  # Shell is the highest-privilege code in this estate -- ops/deploy.sh and
-  # ops/install.sh run as root on production through a NOPASSWD sudoers grant.
-  # Nothing had ever read them. shellcheck is advisory here for the same reason
+  # Shell is the highest-privilege code here -- ops/install.sh runs as root.
+  # shellcheck is advisory for the same reason
   # ruff is, but `error`-level findings are expected to be fixed before merge;
   # STANDARDS.md > Code style says so.
   #
@@ -236,9 +122,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${BASE_SHA:-}" ]; then
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.sh' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.sh' > changed.txt
           else
-            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.sh' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.sh' > changed.txt
           fi
           echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
           echo "Changed shell scripts:"
@@ -282,9 +168,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${BASE_SHA:-}" ]; then
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.md' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.md' > changed.txt
           else
-            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.md' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.md' > changed.txt
           fi
           echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
           echo "Changed Markdown files:"
@@ -322,9 +208,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${BASE_SHA:-}" ]; then
-            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.json' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.json' > changed.txt
           else
-            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.json' > changed.txt || true
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.json' > changed.txt
           fi
           fail=0
           while IFS= read -r f; do
@@ -343,3 +229,141 @@ jobs:
             fi
           done < changed.txt
           [ "$fail" -eq 0 ] || exit 1
+
+  # ---------------------------------------------------------------------------
+  # YAML. Errors BLOCK, warnings annotate -- and yamllint draws that line
+  # itself: it exits 1 on an error (a duplicate key, broken indentation, a line
+  # past .yamllint's 120 columns) and 0 on warnings alone. So no
+  # continue-on-error here, unlike ruff and shellcheck.
+  #
+  # Changed files only, so a repo's existing warnings never turn a PR red. The
+  # exception is a change to .yamllint itself, which can change the verdict on
+  # files nobody touched, so it re-checks every YAML file in the repo.
+  #
+  # This checks YAML. Whether a workflow will actually RUN is the actionlint job
+  # below -- yamllint passes a workflow Actions silently ignores.
+  #
+  # yamllint reads .yamllint from the repo root; copy it from the templates
+  # alongside this file. Without it the defaults apply, and they fail every
+  # workflow here (80 columns, and `on:` read as a boolean).
+  #
+  # From the Ubuntu archive, like shellcheck -- see STANDARDS.md > Installing
+  # the tools.
+  # ---------------------------------------------------------------------------
+  yaml:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # No `|| true` on the git diff: a diff that fails would otherwise leave
+      # an empty list and a green check that inspected nothing.
+      #
+      # reference/ and .venv/ are filtered here as well as in .yamllint's
+      # `ignore:`, so the exclusion does not depend on the installed yamllint
+      # honouring `ignore:` for files named on the command line.
+      - name: Collect changed YAML files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            RANGE="${BASE_SHA}...HEAD"
+          else
+            RANGE="HEAD~1...HEAD"
+          fi
+          git diff --name-only --diff-filter=ACMR "$RANGE" -- '*.yml' '*.yaml' .yamllint > diff.txt
+          if grep -qx '.yamllint' diff.txt; then
+            echo ".yamllint changed -- checking every YAML file."
+            git ls-files -- '*.yml' '*.yaml' .yamllint > diff.txt
+          fi
+          # grep -v exits 1 when it filters everything out; that is not an error.
+          grep -vE '^(reference|\.venv)/' diff.txt > changed.txt || true
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "YAML files to check:"
+          cat changed.txt
+
+      - name: Require yamllint
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          if ! command -v yamllint > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq yamllint
+          fi
+          yamllint --version
+
+      - name: yamllint
+        if: steps.changed.outputs.count != '0'
+        run: xargs -r -a changed.txt yamllint --format github --
+
+  # ---------------------------------------------------------------------------
+  # Workflow files. BLOCKING, like json: a finding here is a workflow that will
+  # not run as written, or one that hands a PR author a shell -- not a style
+  # opinion. What it catches that nothing else here does:
+  #
+  #  - A workflow Actions silently ignores. Actions reads only the FIRST YAML
+  #    document in a file, and yamllint accepts several, so a second `---` in a
+  #    file that already starts with one leaves a file that lints clean and
+  #    never runs. actionlint reads the file the way Actions does
+  #    and fails it.
+  #  - Script injection. `${{ github.event.pull_request.title }}` inside a
+  #    `run:` is attacker-controlled shell in a PR-triggered job.
+  #  - shellcheck over every `run:` block. The shell job above sees only *.sh
+  #    files.
+  #  - Unknown `runs-on` labels, so a typo fails here instead of queueing
+  #    forever.
+  #
+  # Every workflow file, not just changed ones: there are only a few, and a
+  # change to .github/actionlint.yaml has to re-check all of them.
+  #
+  # Pinned and checksum-verified, the same shape as gitleaks in
+  # secret-scan.yml. The pin also stops a new actionlint rule from turning a PR
+  # red on a workflow nobody touched. Bump it deliberately, in its own PR.
+  # ---------------------------------------------------------------------------
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          TARBALL="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+
+          curl -sSL --fail -o "/tmp/${TARBALL}" "${BASE}/${TARBALL}"
+          curl -sSL --fail -o /tmp/actionlint_checksums.txt \
+            "${BASE}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+
+          cd /tmp
+          grep " ${TARBALL}\$" actionlint_checksums.txt > /tmp/expected.sha256
+          if [ ! -s /tmp/expected.sha256 ]; then
+            echo "::error::No checksum published for ${TARBALL}. Refusing to install."
+            exit 1
+          fi
+          sha256sum -c /tmp/expected.sha256
+
+          tar -xzf "/tmp/${TARBALL}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      # Load-bearing. With no shellcheck on PATH, actionlint skips every `run:`
+      # block and exits 0 without a word -- measured against a block carrying
+      # two known findings. The runner image ships shellcheck today; this step
+      # makes that a checked fact instead of an assumption.
+      - name: Require shellcheck
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck --version
+
+      - name: actionlint
+        run: actionlint
