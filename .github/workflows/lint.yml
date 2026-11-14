@@ -90,12 +90,12 @@ jobs:
       - name: ruff check (advisory)
         if: steps.changed.outputs.count != '0'
         continue-on-error: true
-        run: xargs -r -a changed.txt ruff check --force-exclude --output-format=github --
+        run: xargs -r -d '\n' -a changed.txt ruff check --force-exclude --output-format=github --
 
       - name: ruff format --check (advisory)
         if: steps.changed.outputs.count != '0'
         continue-on-error: true
-        run: xargs -r -a changed.txt ruff format --check --force-exclude --
+        run: xargs -r -d '\n' -a changed.txt ruff format --check --force-exclude --
 
   # ---------------------------------------------------------------------------
   # Shell is the highest-privilege code here -- ops/install.sh runs as root.
@@ -136,7 +136,7 @@ jobs:
         run: |
           set -uo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          xargs -r -a changed.txt shellcheck --format=gcc --
+          xargs -r -d '\n' -a changed.txt shellcheck --format=gcc --
 
   # ---------------------------------------------------------------------------
   # Markdown and JSON. Markdown is advisory, for the same reason ruff and
@@ -187,7 +187,7 @@ jobs:
       - name: pymarkdown scan (advisory)
         if: steps.changed.outputs.count != '0'
         continue-on-error: true
-        run: xargs -r -a changed.txt pymarkdown --config .pymarkdown.json scan --
+        run: xargs -r -d '\n' -a changed.txt pymarkdown --config .pymarkdown.json scan --
 
   json:
     name: json
@@ -275,8 +275,13 @@ jobs:
           else
             RANGE="HEAD~1...HEAD"
           fi
-          git diff --name-only --diff-filter=ACMR "$RANGE" -- '*.yml' '*.yaml' .yamllint > diff.txt
-          if grep -qx '.yamllint' diff.txt; then
+          git diff --name-only --diff-filter=ACMR "$RANGE" -- '*.yml' '*.yaml' > diff.txt
+          # .yamllint is checked WITHOUT --diff-filter: deleting it changes the verdict for every
+          # file, and ACMR leaves deletions out, which skipped the full recheck when it went.
+          # Captured by assignment, not inside the test: set -e stops on a failed assignment, but
+          # not on a failed $(...) inside [ ], which would read as "config unchanged".
+          config_changed=$(git diff --name-only "$RANGE" -- .yamllint)
+          if [ -n "$config_changed" ]; then
             echo ".yamllint changed -- checking every YAML file."
             git ls-files -- '*.yml' '*.yaml' .yamllint > diff.txt
           fi
@@ -297,7 +302,7 @@ jobs:
 
       - name: yamllint
         if: steps.changed.outputs.count != '0'
-        run: xargs -r -a changed.txt yamllint --format github --
+        run: xargs -r -d '\n' -a changed.txt yamllint --format github --
 
   # ---------------------------------------------------------------------------
   # Workflow files. BLOCKING, like json: a finding here is a workflow that will
